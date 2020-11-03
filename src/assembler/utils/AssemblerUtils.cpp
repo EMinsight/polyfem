@@ -67,24 +67,23 @@ namespace polyfem
 										  const int n_basis,
 										  const std::vector<ElementBases> &bases,
 										  const std::vector<ElementBases> &gbases,
-										  const StiffnessRawData &index_mapping,
 										  StiffnessMatrix &stiffness) const
 	{
 		if (assembler == "Helmholtz")
-			helmholtz_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			helmholtz_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 		else if (assembler == "Laplacian")
-			laplacian_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			laplacian_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 		else if (assembler == "Bilaplacian")
-			bilaplacian_main_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			bilaplacian_main_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 
 		else if (assembler == "LinearElasticity")
-			linear_elasticity_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			linear_elasticity_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 		else if (assembler == "HookeLinearElasticity")
-			hooke_linear_elasticity_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			hooke_linear_elasticity_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 		else if (assembler == "Stokes" || assembler == "NavierStokes")
-			stokes_velocity_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			stokes_velocity_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 		else if (assembler == "IncompressibleLinearElasticity")
-			incompressible_lin_elast_displacement_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			incompressible_lin_elast_displacement_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 
 		else if (assembler == "SaintVenant")
 			return;
@@ -98,7 +97,7 @@ namespace polyfem
 		{
 			logger().warn("{} not found, fallback to default", assembler);
 			assert(false);
-			laplacian_.assemble(is_volume, n_basis, bases, gbases, index_mapping, stiffness);
+			laplacian_.assemble(is_volume, n_basis, bases, gbases, stiffness);
 		}
 	}
 

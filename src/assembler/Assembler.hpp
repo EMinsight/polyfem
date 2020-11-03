@@ -83,14 +83,6 @@ namespace polyfem
 			const int n_basis,
 			const std::vector<ElementBases> &bases,
 			const std::vector<ElementBases> &gbases,
-			const StiffnessRawData &index_mapping,
-			StiffnessMatrix &stiffness) const;
-
-		void assemble(
-			const bool is_volume,
-			const int n_basis,
-			const std::vector<ElementBases> &bases,
-			const std::vector<ElementBases> &gbases,
 			StiffnessMatrix &stiffness) const;
 
 		inline LocalAssembler &local_assembler() { return local_assembler_; }
