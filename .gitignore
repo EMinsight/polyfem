@@ -60,6 +60,7 @@ bin.nosync
 build
 xcode
 3rdparty*
+xcode*
 /data
 
 

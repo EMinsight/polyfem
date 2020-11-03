@@ -87,6 +87,7 @@ namespace polyfem
 
 		double avg_mass;
 		StiffnessMatrix stiffness, mass;
+		StiffnessRawData index_mapping;
 		Eigen::MatrixXd rhs, rhs_in;
 		Eigen::MatrixXd sol, pressure;
 

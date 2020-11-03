@@ -629,13 +629,18 @@ namespace polyfem
 		timer.start();
 		logger().info("Assembling stiffness mat...");
 
+		logger().debug("Assembling indices...");
+		IndexAssembler index_ass;
+		index_ass.assemble(AssemblerUtils::is_tensor(formulation()), mesh->is_volume(), n_bases, bases, iso_parametric() ? bases : geom_bases, index_mapping);
+
 		// if(problem->is_mixed())
 		if (assembler.is_mixed(formulation()))
 		{
 			if (assembler.is_linear(formulation()))
 			{
 				StiffnessMatrix velocity_stiffness, mixed_stiffness, pressure_stiffness;
-				assembler.assemble_problem(formulation(), mesh->is_volume(), n_bases, bases, iso_parametric() ? bases : geom_bases, velocity_stiffness);
+
+				assembler.assemble_problem(formulation(), mesh->is_volume(), n_bases, bases, iso_parametric() ? bases : geom_bases, index_mapping, velocity_stiffness);
 				assembler.assemble_mixed_problem(formulation(), mesh->is_volume(), n_pressure_bases, n_bases, pressure_bases, bases, iso_parametric() ? bases : geom_bases, mixed_stiffness);
 				assembler.assemble_pressure_problem(formulation(), mesh->is_volume(), n_pressure_bases, pressure_bases, iso_parametric() ? bases : geom_bases, pressure_stiffness);
 
@@ -669,7 +674,7 @@ namespace polyfem
 		}
 		else
 		{
-			assembler.assemble_problem(formulation(), mesh->is_volume(), n_bases, bases, iso_parametric() ? bases : geom_bases, stiffness);
+			assembler.assemble_problem(formulation(), mesh->is_volume(), n_bases, bases, iso_parametric() ? bases : geom_bases, index_mapping, stiffness);
 			if (problem->is_time_dependent())
 			{
 				assembler.assemble_mass_matrix(formulation(), mesh->is_volume(), n_bases, density, bases, iso_parametric() ? bases : geom_bases, mass);
@@ -913,7 +918,7 @@ namespace polyfem
 					save_wire("step_" + std::to_string(0) + ".obj");
 				}
 
-				assembler.assemble_problem(formulation(), mesh->is_volume(), n_bases, bases, gbases, velocity_stiffness);
+				assembler.assemble_problem(formulation(), mesh->is_volume(), n_bases, bases, gbases, index_mapping, velocity_stiffness);
 				assembler.assemble_mixed_problem(formulation(), mesh->is_volume(), n_pressure_bases, n_bases, pressure_bases, bases, gbases, mixed_stiffness);
 				assembler.assemble_pressure_problem(formulation(), mesh->is_volume(), n_pressure_bases, pressure_bases, gbases, pressure_stiffness);
 

@@ -25,6 +25,7 @@
 #include <tbb/parallel_reduce.h>
 #include <tbb/task_scheduler_init.h>
 #include <tbb/enumerable_thread_specific.h>
+#include <tbb/concurrent_vector.h>
 #endif
 
 namespace polyfem
@@ -46,6 +47,13 @@ namespace polyfem
 				tmp_mat.resize(rows, cols);
 				stiffness.resize(rows, cols);
 			}
+		};
+
+		class LocalThreadRawMatStorage
+		{
+		public:
+			ElementAssemblyValues vals;
+			QuadratureVector da;
 		};
 
 		class LocalThreadVecStorage
@@ -120,7 +128,161 @@ namespace polyfem
 			mat.makeCompressed();
 		}
 #endif
+
+		class EmptyAssembler
+		{
+		public:
+			Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 9, 1>
+			assemble(const ElementAssemblyValues &vals, const int i, const int j, const QuadratureVector &da) const
+			{
+				Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 9, 1> res(size() * size());
+				res.setOnes();
+				return res;
+			}
+
+			int size() const
+			{
+				if (is_tensor)
+					return size_;
+				return 1;
+			}
+
+			bool is_tensor;
+			int size_;
+		};
 	} // namespace
+
+	void IndexAssembler::assemble(
+		const bool is_tensor,
+		const bool is_volume,
+		const int n_basis,
+		const std::vector<ElementBases> &bases,
+		const std::vector<ElementBases> &gbases,
+		StiffnessRawData &index_mapping) const
+	{
+		StiffnessMatrix mat;
+
+		Assembler<EmptyAssembler> assembler;
+		assembler.local_assembler().is_tensor = is_tensor;
+		assembler.local_assembler().size_ = is_volume ? 3 : 2;
+
+		assembler.assemble(is_volume, n_basis, bases, gbases, mat);
+
+		mat.makeCompressed();
+		int index = 0;
+		index_mapping.init(mat);
+
+		for (int k = 0; k < mat.outerSize(); ++k)
+		{
+			for (StiffnessMatrix::InnerIterator it(mat, k); it; ++it)
+			{
+				index_mapping.add_index(it.row(), it.col(), index);
+				++index;
+			}
+		}
+	}
+
+	template <class LocalAssembler>
+	void Assembler<LocalAssembler>::assemble(
+		const bool is_volume,
+		const int n_basis,
+		const std::vector<ElementBases> &bases,
+		const std::vector<ElementBases> &gbases,
+		const StiffnessRawData &index_mapping,
+		StiffnessMatrix &stiffness) const
+	{
+#ifdef POLYFEM_WITH_TBB
+		typedef tbb::enumerable_thread_specific<LocalThreadRawMatStorage> LocalStorage;
+		LocalStorage storages;
+		tbb::concurrent_vector<double> values;
+#else
+		LocalThreadRawMatStorage loc_storage;
+		std::vector<double> values;
+#endif
+		values.resize(index_mapping.nnz());
+		std::fill(values.begin(), values.end(), 0);
+
+		const int n_bases = int(bases.size());
+		igl::Timer timerg;
+		timerg.start();
+#ifdef POLYFEM_WITH_TBB
+		tbb::parallel_for(tbb::blocked_range<int>(0, n_bases), [&](const tbb::blocked_range<int> &r) {
+		LocalStorage::reference loc_storage = storages.local();
+
+		for (int e = r.begin(); e != r.end(); ++e) {
+#else
+		for (int e = 0; e < n_bases; ++e)
+		{
+#endif
+            ElementAssemblyValues &vals = loc_storage.vals;
+			// igl::Timer timer; timer.start();
+			vals.compute(e, is_volume, bases[e], gbases[e]);
+
+			const Quadrature &quadrature = vals.quadrature;
+
+			assert(MAX_QUAD_POINTS == -1 || quadrature.weights.size() < MAX_QUAD_POINTS);
+			loc_storage.da = vals.det.array() * quadrature.weights.array();
+			const int n_loc_bases = int(vals.basis_values.size());
+
+			for(int i = 0; i < n_loc_bases; ++i)
+			{
+				// const AssemblyValues &values_i = vals.basis_values[i];
+				// const Eigen::MatrixXd &gradi = values_i.grad_t_m;
+				const auto &global_i = vals.basis_values[i].global;
+
+				for(int j = 0; j <= i; ++j)
+				{
+					// const AssemblyValues &values_j = vals.basis_values[j];
+					// const Eigen::MatrixXd &gradj = values_j.grad_t_m;
+					const auto &global_j = vals.basis_values[j].global;
+
+					const auto stiffness_val = local_assembler_.assemble(vals, i, j, loc_storage.da);
+					assert(stiffness_val.size() == local_assembler_.size() * local_assembler_.size());
+
+					// igl::Timer t1; t1.start();
+					for(int n = 0; n < local_assembler_.size(); ++n)
+					{
+						for(int m = 0; m < local_assembler_.size(); ++m)
+						{
+							const double local_value = stiffness_val(n*local_assembler_.size()+m);
+							if (std::abs(local_value) < 1e-30) { continue; }
+
+							for(size_t ii = 0; ii < global_i.size(); ++ii)
+							{
+								const auto gi = global_i[ii].index*local_assembler_.size()+m;
+								const auto wi = global_i[ii].val;
+
+								for(size_t jj = 0; jj < global_j.size(); ++jj)
+								{
+									const auto gj = global_j[jj].index*local_assembler_.size()+n;
+									const auto wj = global_j[jj].val;
+
+									values[index_mapping(gi, gj)] += local_value * wi * wj;
+									if (j < i) {
+										values[index_mapping(gj, gi)] += local_value * wi * wj;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+				// timer.stop();
+				// if (!vals.has_parameterization) { std::cout << "-- Timer: " << timer.getElapsedTime() << std::endl; }
+#ifdef POLYFEM_WITH_TBB
+		} });
+#else
+		}
+#endif
+		timerg.stop();
+		logger().debug("done separate assembly {}s...", timerg.getElapsedTime());
+
+		timerg.start();
+		index_mapping.build_matrix(values, stiffness);
+		timerg.stop();
+		logger().debug("done merge assembly {}s...", timerg.getElapsedTime());
+	}
 
 	template <class LocalAssembler>
 	void Assembler<LocalAssembler>::assemble(
@@ -516,20 +678,19 @@ namespace polyfem
 		const std::vector<ElementBases> &bases,
 		const std::vector<ElementBases> &gbases,
 		const Eigen::MatrixXd &displacement,
+		const StiffnessRawData &index_mapping,
 		StiffnessMatrix &grad) const
 	{
-		const int buffer_size = std::min(long(1e8), long(n_basis) * local_assembler_.size());
-		// std::cout<<"buffer_size "<<buffer_size<<std::endl;
-
-		grad.resize(n_basis * local_assembler_.size(), n_basis * local_assembler_.size());
-		grad.setZero();
-
 #ifdef POLYFEM_WITH_TBB
-		typedef tbb::enumerable_thread_specific<LocalThreadMatStorage> LocalStorage;
-		LocalStorage storages(LocalThreadMatStorage(buffer_size, grad.rows(), grad.cols()));
+		typedef tbb::enumerable_thread_specific<LocalThreadRawMatStorage> LocalStorage;
+		LocalStorage storages;
+		tbb::concurrent_vector<double> values;
 #else
-		LocalThreadMatStorage loc_storage(buffer_size, grad.rows(), grad.cols());
+		LocalThreadRawMatStorage loc_storage;
+		std::vector<double> values;
 #endif
+		values.resize(index_mapping.nnz());
+		std::fill(values.begin(), values.end(), 0);
 
 		const int n_bases = int(bases.size());
 		igl::Timer timerg;
@@ -560,24 +721,6 @@ namespace polyfem
 			if (project_to_psd)
 				stiffness_val = Eigen::project_to_psd(stiffness_val);
 
-			// bool has_nan = false;
-			// for(int k = 0; k < stiffness_val.size(); ++k)
-			// {
-			// 	if(std::isnan(stiffness_val(k)))
-			// 	{
-			// 		has_nan = true;
-			// 		break;
-			// 	}
-			// }
-
-			// if(has_nan)
-			// {
-			// 	loc_storage.entries.emplace_back(0, 0, std::nan(""));
-			// 	break;
-			// }
-
-
-				// igl::Timer t1; t1.start();
 			for(int i = 0; i < n_loc_bases; ++i)
 			{
 				const auto &global_i = vals.basis_values[i].global;
@@ -604,31 +747,13 @@ namespace polyfem
 									const auto gj = global_j[jj].index*local_assembler_.size() + n;
 									const auto wj = global_j[jj].val;
 
-									loc_storage.entries.emplace_back(gi, gj, local_value * wi * wj);
-									// if (j < i) {
-									// 	loc_storage.entries.emplace_back(gj, gi, local_value * wj * wi);
-									// }
-
-									if(loc_storage.entries.size() >= 1e8)
-									{
-										loc_storage.tmp_mat.setFromTriplets(loc_storage.entries.begin(), loc_storage.entries.end());
-										loc_storage.stiffness += loc_storage.tmp_mat;
-										loc_storage.stiffness.makeCompressed();
-
-										loc_storage.entries.clear();
-										logger().debug("cleaning memory...");
-									}
+									values[index_mapping(gi, gj)] += local_value * wi * wj;
 								}
 							}
 						}
 					}
 				}
-				// t1.stop();
-				// if (!vals.has_parameterization) { std::cout << "-- t1: " << t1.getElapsedTime() << std::endl; }
 			}
-
-				// timer.stop();
-				// if (!vals.has_parameterization) { std::cout << "-- Timer: " << timer.getElapsedTime() << std::endl; }
 #ifdef POLYFEM_WITH_TBB
 		} });
 #else
@@ -640,37 +765,9 @@ namespace polyfem
 
 		timerg.start();
 
-#ifdef POLYFEM_WITH_TBB
-		merge_matrices(storages, grad);
-		// for (LocalStorage::iterator i = storages.begin(); i != storages.end(); ++i)
-		// {
-		// 	// logger().debug("local stiffness: {}, entries: {}", i->stiffness.nonZeros(), i->entries.size());
-		// 	i->tmp_mat.setFromTriplets(i->entries.begin(), i->entries.end());
-		// 	i->entries.clear();
-		// 	i->entries.shrink_to_fit();
-
-		// 	i->stiffness += i->tmp_mat;
-
-		// 	i->tmp_mat.resize(0, 0);
-		// 	i->tmp_mat.data().squeeze();
-
-		// 	i->stiffness.makeCompressed();
-
-		// 	grad += i->stiffness;
-		// 	i->stiffness.resize(0, 0);
-		// 	i->stiffness.data().squeeze();
-
-		// 	grad.makeCompressed();
-		// }
-#else
-		grad = loc_storage.stiffness;
-		loc_storage.tmp_mat.setFromTriplets(loc_storage.entries.begin(), loc_storage.entries.end());
-		grad += loc_storage.tmp_mat;
-		grad.makeCompressed();
-#endif
-
+		index_mapping.build_matrix(values, grad);
 		timerg.stop();
-		logger().trace("done merge assembly {}s...", timerg.getElapsedTime());
+		logger().debug("done merge assembly {}s...", timerg.getElapsedTime());
 	}
 
 	template <class LocalAssembler>

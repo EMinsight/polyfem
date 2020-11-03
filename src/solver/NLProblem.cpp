@@ -260,7 +260,7 @@ namespace polyfem
 			const auto &gbases = state.iso_parametric() ? state.bases : state.geom_bases;
 			if (assembler.is_linear(state.formulation()))
 			{
-				assembler.assemble_problem(state.formulation(), state.mesh->is_volume(), state.n_bases, state.bases, gbases, cached_stiffness);
+				assembler.assemble_problem(state.formulation(), state.mesh->is_volume(), state.n_bases, state.bases, gbases, state.index_mapping, cached_stiffness);
 			}
 		}
 	}
@@ -385,7 +385,7 @@ namespace polyfem
 			hessian = cached_stiffness;
 		}
 		else
-			assembler.assemble_energy_hessian(rhs_assembler.formulation(), state.mesh->is_volume(), state.n_bases, project_to_psd, state.bases, gbases, full, hessian);
+			assembler.assemble_energy_hessian(rhs_assembler.formulation(), state.mesh->is_volume(), state.n_bases, project_to_psd, state.bases, gbases, full, state.index_mapping, hessian);
 		if (is_time_dependent)
 		{
 			hessian *= dt * dt / 2;

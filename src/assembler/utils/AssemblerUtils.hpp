@@ -34,6 +34,7 @@ namespace polyfem
 							  const int n_basis,
 							  const std::vector<ElementBases> &bases,
 							  const std::vector<ElementBases> &gbases,
+							  const StiffnessRawData &index_mapping,
 							  StiffnessMatrix &stiffness) const;
 
 		void assemble_mass_matrix(const std::string &assembler,
@@ -82,6 +83,7 @@ namespace polyfem
 									 const std::vector<ElementBases> &bases,
 									 const std::vector<ElementBases> &gbases,
 									 const Eigen::MatrixXd &displacement,
+									 const StiffnessRawData &index_mapping,
 									 StiffnessMatrix &hessian) const;
 
 		//plotting
