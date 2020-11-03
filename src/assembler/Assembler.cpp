@@ -54,6 +54,13 @@ namespace polyfem
 		public:
 			ElementAssemblyValues vals;
 			QuadratureVector da;
+			std::vector<double> values;
+
+			LocalThreadRawMatStorage(const int size)
+			{
+				values.resize(size);
+				std::fill(values.begin(), values.end(), 0);
+			}
 		};
 
 		class LocalThreadVecStorage
@@ -126,6 +133,41 @@ namespace polyfem
 				});
 
 			mat.makeCompressed();
+		}
+
+		template <typename LTRM>
+		void merge_vectors(tbb::enumerable_thread_specific<LTRM> &storages, std::vector<double> &values)
+		{
+			std::vector<LTRM *> flat_view;
+			for (auto i = storages.begin(); i != storages.end(); ++i)
+			{
+				flat_view.emplace_back(&*i);
+			}
+
+			values = tbb::parallel_reduce(
+				tbb::blocked_range<int>(0, flat_view.size()), values,
+				[&](const tbb::blocked_range<int> &r, const std::vector<double> &m) {
+					std::vector<double> tmp = m;
+					for (int e = r.begin(); e != r.end(); ++e)
+					{
+						const auto storage = flat_view[e];
+						for (int k = 0; k < storage->values.size(); ++k)
+						{
+							tmp[k] += storage->values[k];
+						}
+					}
+
+					return tmp;
+				},
+				[](const std::vector<double> &a, const std::vector<double> &b) {
+					std::vector<double> result = a;
+					for (int k = 0; k < result.size(); ++k)
+					{
+						result[k] += b[k];
+					}
+
+					return result;
+				});
 		}
 #endif
 
@@ -581,14 +623,10 @@ namespace polyfem
 	{
 #ifdef POLYFEM_WITH_TBB
 		typedef tbb::enumerable_thread_specific<LocalThreadRawMatStorage> LocalStorage;
-		LocalStorage storages;
-		tbb::concurrent_vector<double> values;
+		LocalStorage storages(LocalThreadRawMatStorage(index_mapping.nnz()));
 #else
-		LocalThreadRawMatStorage loc_storage;
-		std::vector<double> values;
+		LocalThreadRawMatStorage loc_storage(index_mapping.nnz());
 #endif
-		values.resize(index_mapping.nnz());
-		std::fill(values.begin(), values.end(), 0);
 
 		const int n_bases = int(bases.size());
 		igl::Timer timerg;
@@ -597,6 +635,7 @@ namespace polyfem
 #ifdef POLYFEM_WITH_TBB
 		tbb::parallel_for(tbb::blocked_range<int>(0, n_bases), [&](const tbb::blocked_range<int> &r) {
 		LocalStorage::reference loc_storage = storages.local();
+
 		for (int e = r.begin(); e != r.end(); ++e) {
 #else
 		for (int e = 0; e < n_bases; ++e)
@@ -645,7 +684,7 @@ namespace polyfem
 									const auto gj = global_j[jj].index*local_assembler_.size() + n;
 									const auto wj = global_j[jj].val;
 
-									values[index_mapping(gi, gj)] += local_value * wi * wj;
+									loc_storage.values[index_mapping(gi, gj)] += local_value * wi * wj;
 								}
 							}
 						}
@@ -662,10 +701,25 @@ namespace polyfem
 		logger().trace("done separate assembly {}s...", timerg.getElapsedTime());
 
 		timerg.start();
+#ifdef POLYFEM_WITH_TBB
+		std::vector<double> values(index_mapping.nnz());
+		std::fill(values.begin(), values.end(), 0);
+		// merge_vectors(storages, values);
+
+		for (LocalStorage::iterator storage = storages.begin(); storage != storages.end(); ++storage)
+		{
+			for (int k = 0; k < storage->values.size(); ++k)
+			{
+				values[k] += storage->values[k];
+			}
+		}
 
 		index_mapping.build_matrix(values, grad);
+#else
+		index_mapping.build_matrix(loc_storage.values, grad);
+#endif
 		timerg.stop();
-		logger().debug("done merge assembly {}s...", timerg.getElapsedTime());
+		logger().trace("done merge assembly {}s...", timerg.getElapsedTime());
 	}
 
 	template <class LocalAssembler>

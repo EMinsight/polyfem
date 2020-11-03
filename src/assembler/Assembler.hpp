@@ -16,8 +16,8 @@ namespace polyfem
 	private:
 		std::vector<int> outer_index;
 		std::vector<int> inner_index;
-		// std::vector<std::map<int, int>> index_mapping;
-		std::vector<std::vector<std::pair<int, int>>> index_mapping;
+		// std::vector<std::map<int, long>> index_mapping;
+		std::vector<std::vector<std::pair<int, long>>> index_mapping;
 		int size;
 
 	public:
@@ -36,15 +36,15 @@ namespace polyfem
 				inner_index[i] = mat.innerIndexPtr()[i];
 		}
 
-		inline const int nnz() const { return inner_index.size(); }
+		inline const long nnz() const { return inner_index.size(); }
 
-		void add_index(const int row, const int col, const int index)
+		void add_index(const int row, const int col, const long index)
 		{
 			// index_mapping[row][col] = index;
 			index_mapping[row].emplace_back(col, index);
 		}
 
-		int operator()(const int row, const int col) const
+		long operator()(const int row, const int col) const
 		{
 			// return index_mapping[row].at(col);
 			const auto &tmp = index_mapping[row];
